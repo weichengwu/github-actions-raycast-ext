@@ -68,6 +68,12 @@ interface JobResponse {
   html_url: string;
 }
 
+interface BranchResponse {
+  name: string;
+  commit: { sha: string };
+  protected: boolean;
+}
+
 interface ContentsResponse {
   content: string;
   encoding: string;
@@ -313,6 +319,13 @@ export class GitHubClient {
     );
 
     return workflowResults.filter((workflow): workflow is DispatchableWorkflow => workflow !== null);
+  }
+
+  async listBranches(repoFullName: string): Promise<string[]> {
+    const response = await this.request<BranchResponse[]>(
+      `/repos/${encodeRepositoryPath(repoFullName)}/branches?per_page=100`,
+    );
+    return response.map((branch) => branch.name);
   }
 
   async dispatchWorkflow(

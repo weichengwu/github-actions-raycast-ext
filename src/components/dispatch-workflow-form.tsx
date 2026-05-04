@@ -12,6 +12,7 @@ import {
 import { useCachedPromise } from "@raycast/utils";
 import { useEffect, useMemo, useState } from "react";
 import { getErrorMessage } from "../lib/errors";
+import { getLocalGitBranches } from "../lib/git";
 import { getGitHubToken } from "../lib/preferences";
 import { getRecentRepositories, recordRecentRepository, recordRecentWorkflowTarget } from "../lib/storage";
 import { GitHubClient, WorkflowInspectionError } from "../services/github-client";
@@ -33,6 +34,7 @@ export function DispatchWorkflowForm({ initialRepository }: DispatchWorkflowForm
   const client = useMemo(() => (token ? new GitHubClient(token) : null), [token]);
   const [selectedRepository, setSelectedRepository] = useState(initialRepository ?? "");
   const [selectedWorkflowId, setSelectedWorkflowId] = useState("");
+  const [selectedRef, setSelectedRef] = useState("");
   const [workflowLoadError, setWorkflowLoadError] = useState<string | null>(null);
 
   const { data: repositories = [], isLoading: repositoriesLoading } = useCachedPromise(
@@ -50,6 +52,23 @@ export function DispatchWorkflowForm({ initialRepository }: DispatchWorkflowForm
   );
 
   const { data: recentRepositories = [] } = useCachedPromise(getRecentRepositories, [], { initialData: [] });
+
+  const { data: remoteBranches = [] } = useCachedPromise(
+    async (repo: string): Promise<string[]> => {
+      if (!client || !repo) {
+        return [];
+      }
+
+      return client.listBranches(repo);
+    },
+    [selectedRepository],
+    {
+      execute: Boolean(client && selectedRepository),
+      initialData: [],
+    },
+  );
+
+  const localBranches = useMemo(() => getLocalGitBranches(), []);
 
   useEffect(() => {
     if (selectedRepository) {
@@ -101,6 +120,15 @@ export function DispatchWorkflowForm({ initialRepository }: DispatchWorkflowForm
     },
   );
 
+  const selectedWorkflow = workflows.find((workflow) => String(workflow.id) === selectedWorkflowId);
+  const selectedRepositoryDetails = repositories.find((repository) => repository.fullName === selectedRepository);
+
+  useEffect(() => {
+    if (selectedRepositoryDetails) {
+      setSelectedRef(selectedRepositoryDetails.defaultBranch);
+    }
+  }, [selectedRepositoryDetails]);
+
   useEffect(() => {
     if (!workflows.length) {
       setSelectedWorkflowId("");
@@ -114,11 +142,8 @@ export function DispatchWorkflowForm({ initialRepository }: DispatchWorkflowForm
     setSelectedWorkflowId(String(workflows[0].id));
   }, [selectedWorkflowId, workflows]);
 
-  const selectedWorkflow = workflows.find((workflow) => String(workflow.id) === selectedWorkflowId);
-  const selectedRepositoryDetails = repositories.find((repository) => repository.fullName === selectedRepository);
-
   async function handleSubmit(values: DispatchFormValues) {
-    if (!client || !selectedWorkflow || !selectedRepository) {
+    if (!client || !selectedWorkflow || !selectedRepository || !selectedRef) {
       return;
     }
 
@@ -134,7 +159,7 @@ export function DispatchWorkflowForm({ initialRepository }: DispatchWorkflowForm
       }, {});
 
       await client.dispatchWorkflow(selectedRepository, selectedWorkflow.id, {
-        ref: values.ref,
+        ref: selectedRef,
         inputs,
       });
 
@@ -147,7 +172,7 @@ export function DispatchWorkflowForm({ initialRepository }: DispatchWorkflowForm
 
       toast.style = Toast.Style.Success;
       toast.title = "Workflow dispatched";
-      toast.message = `${selectedWorkflow.name} on ${values.ref}`;
+      toast.message = `${selectedWorkflow.name} on ${selectedRef}`;
     } catch (error) {
       toast.style = Toast.Style.Failure;
       toast.title = "Dispatch failed";
@@ -230,12 +255,24 @@ export function DispatchWorkflowForm({ initialRepository }: DispatchWorkflowForm
 
       {workflowLoadError ? <Form.Description title="Workflow inspection failed" text={workflowLoadError} /> : null}
 
-      <Form.TextField
-        id="ref"
-        title="Ref"
-        placeholder={selectedRepositoryDetails?.defaultBranch ?? "main"}
-        defaultValue={selectedRepositoryDetails?.defaultBranch ?? "main"}
-      />
+      <Form.Dropdown id="ref" title="Ref" value={selectedRef} onChange={setSelectedRef}>
+        {remoteBranches.length > 0 ? (
+          <Form.Dropdown.Section title="Remote Branches">
+            {remoteBranches.map((branch) => (
+              <Form.Dropdown.Item key={`remote-${branch}`} value={branch} title={branch} />
+            ))}
+          </Form.Dropdown.Section>
+        ) : null}
+        {localBranches.length > 0 ? (
+          <Form.Dropdown.Section title="Local Branches">
+            {localBranches
+              .filter((branch) => !remoteBranches.includes(branch))
+              .map((branch) => (
+                <Form.Dropdown.Item key={`local-${branch}`} value={branch} title={branch} />
+              ))}
+          </Form.Dropdown.Section>
+        ) : null}
+      </Form.Dropdown>
 
       {selectedWorkflow?.inputs.map((input) => {
         const id = `input_${input.name}`;
